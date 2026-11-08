@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,9 +81,11 @@ func (f *Fixer) Check(ctx context.Context, id string) Check {
 		return string(out), err
 	}
 	if out, err := run("compile"); err != nil {
+		slog.Debug("fix does not compile", "lib", "fix", "id", id, "err", err, "output", tail(out, 20))
 		return done("failed", "compile", out)
 	}
 	if out, err := run("test"); err != nil {
+		slog.Debug("fix fails tests", "lib", "fix", "id", id, "err", err, "output", tail(out, 20))
 		return done("failed", "tests", out)
 	}
 	return done("passed", "tests", "")

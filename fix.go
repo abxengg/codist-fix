@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -313,7 +314,10 @@ func (f *Fixer) Remember(n Note) error {
 	if f.Notes == "" {
 		return nil
 	}
-	raw, _ := json.MarshalIndent(f.notes, "", " ")
+	raw, err := json.MarshalIndent(f.notes, "", " ")
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(f.Notes, raw, 0o600)
 }
 
@@ -322,8 +326,15 @@ func (f *Fixer) load() {
 		return
 	}
 	f.loaded = true
-	if raw, err := os.ReadFile(f.Notes); err == nil {
-		_ = json.Unmarshal(raw, &f.notes)
+	raw, err := os.ReadFile(f.Notes)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("rejection notes not read", "lib", "fix", "file", f.Notes, "err", err)
+		}
+		return
+	}
+	if err := json.Unmarshal(raw, &f.notes); err != nil {
+		slog.Warn("rejection notes unreadable; starting fresh", "lib", "fix", "file", f.Notes, "err", err)
 	}
 }
 

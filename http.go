@@ -3,6 +3,7 @@ package fix
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 )
 
@@ -31,15 +32,20 @@ func (f *Fixer) Routes(handle func(pattern string, h func(http.ResponseWriter, *
 		var refused Refused
 		switch {
 		case errors.As(err, &refused):
+			slog.Info("fix refused", "lib", "fix", "sha", in.SHA, "path", in.Path, "title", in.Title, "why", refused.Reason)
 			reply(w, map[string]any{"blocked": true, "error": refused.Reason})
 		case err != nil:
+			slog.Warn("fix not prepared", "lib", "fix", "sha", in.SHA, "path", in.Path, "title", in.Title, "err", err)
 			fail(w, http.StatusUnprocessableEntity, err.Error())
 		default:
+			slog.Info("fix prepared", "lib", "fix", "id", p.ID, "sha", in.SHA, "title", in.Title, "files", len(p.Paths))
 			reply(w, p)
 		}
 	})
 	handle("POST /api/fix/{id}/check", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, f.Check(r.Context(), r.PathValue("id")))
+		c := f.Check(r.Context(), r.PathValue("id"))
+		slog.Info("fix checked", "lib", "fix", "id", r.PathValue("id"), "status", c.Status, "step", c.Step, "took_ms", c.TookMs)
+		reply(w, c)
 	})
 	handle("POST /api/fix/{id}/apply", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -48,9 +54,11 @@ func (f *Fixer) Routes(handle func(pattern string, h func(http.ResponseWriter, *
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		sha, err := f.Apply(r.PathValue("id"), in.Message)
 		if err != nil {
+			slog.Warn("fix not applied", "lib", "fix", "id", r.PathValue("id"), "err", err)
 			fail(w, http.StatusConflict, err.Error())
 			return
 		}
+		slog.Info("fix applied", "lib", "fix", "id", r.PathValue("id"), "commit", sha)
 		reply(w, map[string]string{"commit": sha})
 	})
 	handle("DELETE /api/fix/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +73,7 @@ func (f *Fixer) Routes(handle func(pattern string, h func(http.ResponseWriter, *
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if err := f.Remember(Note(in)); err != nil {
+			slog.Warn("rejection note not saved", "lib", "fix", "err", err)
 			fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
