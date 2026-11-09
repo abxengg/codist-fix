@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	git "github.com/AbiXnash/codist-git"
-	"github.com/AbiXnash/codist-git/testrepo"
-	model "github.com/AbiXnash/codist-model"
-	"github.com/AbiXnash/codist-review/store"
+	git "github.com/abxengg/codist-git"
+	"github.com/abxengg/codist-git/testrepo"
+	model "github.com/abxengg/codist-model"
+	"github.com/abxengg/codist-review/store"
 )
 
 // fakeModel answers every chat with reply and records the prompts.

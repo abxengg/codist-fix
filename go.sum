@@ -1,9 +1,9 @@
-github.com/AbiXnash/codist-git v0.4.0 h1:jhaI3xUISng+l/6LiK6TtdTB8mwFOP1T2npNZcyAt8s=
-github.com/AbiXnash/codist-git v0.4.0/go.mod h1:RIqrSdD6PQGw3PA6QT+PyPnZPqUxg5Tw+3TUe6iIrQk=
-github.com/AbiXnash/codist-model v0.4.0 h1:Tiko67RPQsJB1gIu/dlq08MAA799R4Ujzm6V1HoyYdM=
-github.com/AbiXnash/codist-model v0.4.0/go.mod h1:aChuSiyXbY45Ds2jZB6vgUEAw0DCQ56PAyQ2qKpblFM=
-github.com/AbiXnash/codist-review v0.8.0 h1:lIVcJh0n8EEEwKtm3X6j82vZ6Pg/2JbQ0qQLBCT56Po=
-github.com/AbiXnash/codist-review v0.8.0/go.mod h1:i/sxsKMAYLUDa70gy4Wx3glkx1km748OdgmJDBgu1xU=
+github.com/abxengg/codist-git v0.5.0 h1:kC6jalk6OjZrb5w88iG/RQkkO2alcaOdd/tJjdm+mxc=
+github.com/abxengg/codist-git v0.5.0/go.mod h1:VzPRB84JgwgZZt3GG8CBfFeqWSGQCMbVYv+/kEz/P1I=
+github.com/abxengg/codist-model v0.5.0 h1:vhvwWHfNTlV2kFjlKliQKbnhj6vqahREEc1PzzL+RYs=
+github.com/abxengg/codist-model v0.5.0/go.mod h1:Zh7m6Ff4ETQN4CWi6oaV7ySWAny8bcniKjHMcdpmOCc=
+github.com/abxengg/codist-review v0.9.0 h1:h6x5aKEAVlPiKcc8Kf3LhsXznKa9fPAdN+YMLP8mAjE=
+github.com/abxengg/codist-review v0.9.0/go.mod h1:Eefq5cxHHY6t13CFvhuSXAm17x/Hu7sT1jwhGBdSPaI=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 h1:PlNWJRxu5APSV0pWqfIsZ0qt9OOGHSWfZQ4zvx+WgWs=

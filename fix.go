@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	git "github.com/AbiXnash/codist-git"
-	model "github.com/AbiXnash/codist-model"
-	"github.com/AbiXnash/codist-review/store"
+	git "github.com/abxengg/codist-git"
+	model "github.com/abxengg/codist-model"
+	"github.com/abxengg/codist-review/store"
 )
 
 // Fixer prepares, checks and applies fixes in one repository.
