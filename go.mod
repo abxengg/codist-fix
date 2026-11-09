@@ -3,9 +3,9 @@ module github.com/AbiXnash/codist-fix
 go 1.26.0
 
 require (
-	github.com/AbiXnash/codist-git v0.3.0
-	github.com/AbiXnash/codist-model v0.3.0
-	github.com/AbiXnash/codist-review v0.5.1
+	github.com/AbiXnash/codist-git v0.4.0
+	github.com/AbiXnash/codist-model v0.4.0
+	github.com/AbiXnash/codist-review v0.8.0
 )
 
 require (

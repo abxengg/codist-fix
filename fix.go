@@ -181,7 +181,8 @@ func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, 
 		Why     string `json:"why"`
 		Message string `json:"message"`
 	}
-	if _, err := f.Model.ChatJSON(ctx, system, b.String(), schema, &out); err != nil {
+	labelled := model.WithLabel(ctx, model.Label{Kind: "fix", Title: "Fix: " + title, SHA: sha, Path: path})
+	if _, err := f.Model.ChatJSON(labelled, system, b.String(), schema, &out); err != nil {
 		return nil, err
 	}
 	if guidance != "" && !out.OnTopic {
@@ -497,7 +498,7 @@ func (f *Fixer) offTopic(ctx context.Context, finding store.Finding, paths []str
 		strings.Join(paths, ", "), finding.Title, finding.Detail, guidance)
 	topic := map[string]any{"type": "object", "required": []string{"about", "reason"},
 		"properties": map[string]any{"about": map[string]any{"type": "boolean"}, "reason": map[string]any{"type": "string"}}}
-	if _, err := f.Model.ChatJSON(ctx, "You decide whether a suggestion is about fixing one given problem. Answer in JSON.", question, topic, &out); err != nil || out.About {
+	if _, err := f.Model.ChatJSON(model.WithLabel(ctx, model.Label{Kind: "fix", Title: "Is the suggestion about this issue?", Path: paths[0]}), "You decide whether a suggestion is about fixing one given problem. Answer in JSON.", question, topic, &out); err != nil || out.About {
 		return ""
 	}
 	if strings.TrimSpace(out.Reason) == "" {
