@@ -68,6 +68,7 @@ func setup(t *testing.T) (*testrepo.Repo, *Fixer, *fakeModel) {
 		t.Fatal(err)
 	}
 	repo, _ := git.Open(tr.Dir)
+	t.Cleanup(repo.Close) // stop its git process before the folder is removed
 	fm := &fakeModel{reply: `{"onTopic":true,"edits":[{"find":"} catch (Exception e) {\n        }","replace":"} catch (Exception e) {\n            throw new IllegalStateException(e);\n        }"}],"why":"The error was swallowed; now it is rethrown.","message":"Rethrow discount errors"}`}
 	return tr, &Fixer{Repo: repo, Store: st, Model: fm.client(t), Notes: filepath.Join(t.TempDir(), "notes.json")}, fm
 }
