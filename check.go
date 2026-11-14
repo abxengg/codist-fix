@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -33,10 +34,6 @@ func (f *Fixer) Check(ctx context.Context, id string) Check {
 	if p == nil {
 		return done("unavailable", "", "That fix is no longer prepared.")
 	}
-	mvn, err := exec.LookPath("mvn")
-	if err != nil {
-		return done("unavailable", "", "Maven is not installed, so the fix could not be built.")
-	}
 	dir, err := os.MkdirTemp("", "codist-fixcheck-")
 	if err != nil {
 		return done("unavailable", "", err.Error())
@@ -61,6 +58,10 @@ func (f *Fixer) Check(ctx context.Context, id string) Check {
 	module := moduleOf(dir, p.Path)
 	if module == "" {
 		return done("unavailable", "", "There is no Maven project for this file, so the fix could not be built.")
+	}
+	mvn := mavenIn(dir, module)
+	if mvn == "" {
+		return done("unavailable", "", "The project has no Maven wrapper (mvnw) and Maven is not installed, so the fix could not be built.")
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
@@ -89,6 +90,31 @@ func (f *Fixer) Check(ctx context.Context, id string) Check {
 		return done("failed", "tests", out)
 	}
 	return done("passed", "tests", "")
+}
+
+// mavenIn finds the project's Maven wrapper, in the module's folder or one above it up to dir, or mvn on the path;
+// "" when there is neither.
+func mavenIn(dir, module string) string {
+	name := "mvnw"
+	if runtime.GOOS == "windows" {
+		name = "mvnw.cmd"
+	}
+	for d := filepath.FromSlash(module); ; d = filepath.Dir(d) {
+		p := filepath.Join(dir, d, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			if runtime.GOOS != "windows" {
+				_ = os.Chmod(p, st.Mode()|0o111)
+			}
+			return p
+		}
+		if d == "." || d == string(filepath.Separator) {
+			break
+		}
+	}
+	if p, err := exec.LookPath("mvn"); err == nil {
+		return p
+	}
+	return ""
 }
 
 // moduleOf is the Maven module holding path, relative to dir ("." for the root), or "" without a pom.xml.

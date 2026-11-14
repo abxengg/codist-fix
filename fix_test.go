@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -248,5 +249,70 @@ func TestReindent(t *testing.T) {
 	}
 	if reindent(src, "        redis.delete(KEY);", "x\ny") != "x\ny" {
 		t.Fatal("a match from the start of the line is left alone")
+	}
+}
+
+// Git on Windows checks files out with CRLF by default while the commit holds LF. That is not an uncommitted
+// change, and the fixed file keeps its CRLF.
+func TestFixWorksWithCRLFCheckout(t *testing.T) {
+	tr, f, _ := setup(t)
+	tr.Git("config", "core.autocrlf", "true")
+	full := filepath.Join(tr.Dir, filepath.FromSlash(testrepo.ServicePath))
+	os.Remove(full)
+	tr.Git("checkout", "--", testrepo.ServicePath)
+	if src, _ := os.ReadFile(full); !strings.Contains(string(src), "\r\n") {
+		t.Skip("this git did not check the file out with CRLF")
+	}
+	p, err := f.Propose(context.Background(), tr.Head(), testrepo.ServicePath, testrepo.BugLine, title, "")
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := f.Apply(p.ID, p.Message); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	src, _ := os.ReadFile(full)
+	if !strings.Contains(string(src), "throw new IllegalStateException(e);\r\n") || strings.Contains(strings.ReplaceAll(string(src), "\r\n", ""), "\n") {
+		t.Errorf("the fixed file lost its CRLF line endings:\n%q", src)
+	}
+	if out := tr.Git("status", "--porcelain"); out != "" {
+		t.Errorf("working tree not clean after the fix: %s", out)
+	}
+}
+
+// A commit that fails, here because a hook refuses it, leaves the working tree as it was.
+func TestFailedCommitPutsFilesBack(t *testing.T) {
+	tr, f, _ := setup(t)
+	hook := filepath.Join(tr.Dir, ".git", "hooks", "pre-commit")
+	os.MkdirAll(filepath.Dir(hook), 0o755)
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho no >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	full := filepath.Join(tr.Dir, filepath.FromSlash(testrepo.ServicePath))
+	was, _ := os.ReadFile(full)
+	p, err := f.Propose(context.Background(), tr.Head(), testrepo.ServicePath, testrepo.BugLine, title, "")
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if _, err := f.Apply(p.ID, p.Message); err == nil {
+		t.Skip("the hook did not run here")
+	}
+	if now, _ := os.ReadFile(full); string(now) != string(was) {
+		t.Error("the file stayed changed after the commit failed")
+	}
+}
+
+func TestMavenIn(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "services", "order"), 0o755)
+	name := "mvnw"
+	if runtime.GOOS == "windows" {
+		name = "mvnw.cmd"
+	}
+	os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o644)
+	if got := mavenIn(dir, "services/order"); got != filepath.Join(dir, name) {
+		t.Errorf("wrapper at the top not found from a module: %q", got)
+	}
+	if got := mavenIn(dir, "."); got != filepath.Join(dir, name) {
+		t.Errorf("wrapper not found for the root module: %q", got)
 	}
 }

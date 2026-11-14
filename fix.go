@@ -272,18 +272,38 @@ func (f *Fixer) Apply(id, message string) (string, error) {
 			return "", fmt.Errorf("%s changed since this fix was prepared. Close it and ask again.", pth)
 		}
 	}
+	// The files as they are now, so a commit that fails (a hook, no user.name) leaves nothing changed.
+	type saved struct {
+		full string
+		was  []byte
+		mode os.FileMode
+	}
+	var before []saved
+	restore := func() {
+		for _, b := range before {
+			if err := os.WriteFile(b.full, b.was, b.mode); err != nil {
+				slog.Warn("file not put back after a failed fix", "lib", "fix", "file", b.full, "err", err)
+			}
+		}
+	}
 	for _, pth := range p.Paths {
 		full := filepath.Join(f.Repo.Root, filepath.FromSlash(pth))
 		info, err := os.Stat(full)
-		if err != nil {
-			return "", err
+		if err == nil {
+			var was []byte
+			if was, err = os.ReadFile(full); err == nil {
+				before = append(before, saved{full, was, info.Mode().Perm()})
+				err = os.WriteFile(full, withEndingsOf(was, p.changed[pth]), info.Mode().Perm())
+			}
 		}
-		if err := os.WriteFile(full, p.changed[pth], info.Mode().Perm()); err != nil {
+		if err != nil {
+			restore()
 			return "", err
 		}
 	}
 	args := append([]string{"-C", f.Repo.Root, "commit", "-q", "-m", strings.TrimSpace(message), "--"}, p.Paths...)
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		restore()
 		return "", fmt.Errorf("git commit: %s", strings.TrimSpace(string(out)))
 	}
 	f.Discard(id)
@@ -393,10 +413,21 @@ func locate(src []byte, snippet string, line int) int {
 	return max(1, min(line, len(lines)))
 }
 
-// dirty says whether the file in the working tree differs from want.
+// dirty says whether the file in the working tree differs from want, the committed file. Line endings are not a
+// difference: git on Windows checks files out with CRLF by default while the commit holds LF.
 func dirty(root, path string, want []byte) bool {
 	got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
-	return err != nil || string(got) != string(want)
+	return err != nil || unix(got) != unix(want)
+}
+
+func unix(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }
+
+// withEndingsOf gives src the line endings of like, the file it replaces: CRLF when that file uses them.
+func withEndingsOf(like, src []byte) []byte {
+	if !strings.Contains(string(like), "\r\n") {
+		return src
+	}
+	return []byte(strings.ReplaceAll(unix(src), "\n", "\r\n"))
 }
 
 // diff is a unified diff of one file, as git writes it.
