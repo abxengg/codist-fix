@@ -57,6 +57,10 @@ type Proposal struct {
 	Message string        `json:"message"`
 	Branch  string        `json:"branch"`
 	Working bool          `json:"working,omitempty"`
+	// Tries is how many times the model wrote the change: a change that does not compile goes back to it with the
+	// compiler's errors. BuildFailed says the last try still did not compile.
+	Tries       int  `json:"tries,omitempty"`
+	BuildFailed bool `json:"buildFailed,omitempty"`
 
 	base    string            // the commit the fix was written against
 	changed map[string][]byte // new contents by path
@@ -88,6 +92,10 @@ this problem, keeping the code's style, names and behaviour otherwise. Answer in
 "replace" is what it becomes. "why" says in one or two sentences what was wrong and what the change does. "message" is
 a short commit message in the imperative, saying what the fix does.
 
+"replace" holds Java code only. Do not write comments about your reasoning, assumptions or alternatives: say those in
+"why". If the fix needs a new import, add a separate edit whose "find" is an import line at the top of the file and
+whose "replace" is that line followed by the new one. Never put an import inside a class or method.
+
 If the developer gave a suggestion, follow it. If the suggestion is not about this problem (another issue, another
 file, a new feature), set "onTopic" to false, say why in "refusal", and make no edits.
 
@@ -110,7 +118,52 @@ var schema = map[string]any{
 // Propose prepares a fix for the issue at path:line, found in commit sha with this title. guidance is the person's
 // own suggestion, or "". The fix is written against the checked-out commit, not sha, because that is the code it
 // will change.
+// MaxTries is how many times the model may write a fix before Codist shows it, when the earlier ones do not compile.
+const MaxTries = 3
+
+// Propose asks the model for a fix and builds it at once. A fix that does not compile goes back to the model with
+// its own change and the compiler's errors, up to MaxTries in all, so a person only sees a fix that builds, or is told
+// plainly that none did.
 func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, guidance string, also ...Ref) (*Proposal, error) {
+	var last *Proposal
+	retry := ""
+	for try := 1; try <= MaxTries; try++ {
+		p, err := f.attempt(ctx, sha, path, line, title, guidance, retry, also...)
+		if err != nil {
+			var refused Refused
+			switch {
+			case errors.As(err, &refused) || ctx.Err() != nil:
+				return nil, err
+			case last != nil: // a later try went wrong: the earlier fix is still worth showing
+				return last, nil
+			case try < MaxTries:
+				// No usable answer (not JSON, or edits that match nothing): ask again, saying what went wrong.
+				slog.Info("fix attempt failed, asking again", "lib", "fix", "try", try, "err", err)
+				retry = "\n## Your last answer could not be used\n" + clip(err.Error(), 300) +
+					"\nAnswer again with one short JSON object: a few small edits whose \"find\" is copied exactly from the code shown.\n"
+				continue
+			}
+			return nil, err
+		}
+		p.Tries = try
+		if last != nil {
+			f.Discard(last.ID)
+		}
+		last = p
+		out, ok, checked := f.compiles(ctx, p)
+		if !checked || ok {
+			return p, nil
+		}
+		p.BuildFailed = true
+		slog.Info("fix does not compile, asking again", "lib", "fix", "id", p.ID, "try", try)
+		retry = fmt.Sprintf("\n## Your last change did not compile\n```diff\n%s```\nThe compiler said:\n```\n%s\n```\n"+
+			"Write the change again so it compiles: call only methods, fields and classes that exist in the code shown, keep to the "+
+			"recommended approach, and change nothing else.\n", p.Patch, compilerErrors(out))
+	}
+	return last, nil
+}
+
+func (f *Fixer) attempt(ctx context.Context, sha, path string, line int, title, guidance, retry string, also ...Ref) (*Proposal, error) {
 	if f.Model == nil {
 		return nil, errors.New("Fixing needs the model; it is not available.")
 	}
@@ -156,7 +209,7 @@ func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, 
 		for i, fl := range files {
 			paths[i] = fl.path
 		}
-		if reason := f.offTopic(ctx, finding, paths, guidance); reason != "" {
+		if reason := f.offTopicOnce(ctx, retry, finding, paths, guidance); reason != "" {
 			return nil, Refused{reason}
 		}
 	}
@@ -171,6 +224,7 @@ func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, 
 	if guidance != "" {
 		fmt.Fprintf(&b, "\n## Fix it this way (the developer asked for this; follow it exactly)\n%s\n", guidance)
 	}
+	b.WriteString(retry)
 	var out struct {
 		OnTopic bool   `json:"onTopic"`
 		Refusal string `json:"refusal"`
@@ -204,7 +258,9 @@ func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, 
 				cur = fl.src
 			}
 			if n := strings.Count(string(cur), e.Find); n == 1 {
-				changed[fl.path] = []byte(strings.Replace(string(cur), e.Find, reindent(string(cur), e.Find, e.Replace), 1))
+				replace, imports := tidy(e.Find, e.Replace)
+				next := strings.Replace(string(cur), e.Find, reindent(string(cur), e.Find, replace), 1)
+				changed[fl.path] = []byte(addImports(next, imports))
 				hit = fl.path
 				break
 			} else if n > 1 {
@@ -536,4 +592,121 @@ func (f *Fixer) offTopic(ctx context.Context, finding store.Finding, paths []str
 		return "This suggestion is not about this issue."
 	}
 	return strings.TrimSpace(out.Reason)
+}
+
+var (
+	importLine = regexp.MustCompile(`^\s*import\s+(static\s+)?[\w.]+(\.\*)?\s*;`)
+	importAt   = regexp.MustCompile(`(?m)^import\s+[^\n]*;[^\n]*$`)
+	packageAt  = regexp.MustCompile(`(?m)^package\s+[^\n]*;[^\n]*$`)
+)
+
+// tidy cleans a model's replacement before it is used. A small model writes its reasoning into the code as comments
+// ("// Assuming the class exists...") and puts imports where the change is, inside a method, which does not compile.
+// Comments the model added are dropped (comments already in the code it replaces are kept), and import lines are
+// taken out to be added to the file's imports.
+func tidy(find, replace string) (string, []string) {
+	had := map[string]bool{}
+	for _, l := range strings.Split(find, "\n") {
+		had[strings.TrimSpace(l)] = true
+	}
+	var out, imports []string
+	inBlock := false
+	for _, l := range strings.Split(replace, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case had[t]:
+			out = append(out, l)
+		case importLine.MatchString(l):
+			imports = append(imports, strings.TrimSpace(l[:strings.Index(l, ";")+1]))
+		case inBlock:
+			if strings.Contains(t, "*/") {
+				inBlock = false
+			}
+		case strings.HasPrefix(t, "/*"):
+			inBlock = !strings.Contains(t, "*/")
+		case strings.HasPrefix(t, "//"):
+			// a comment line the model added: dropped
+		default:
+			if i := commentAt(l); i >= 0 && !had[strings.TrimSpace(l)] {
+				l = strings.TrimRight(l[:i], " \t")
+			}
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n"), imports
+}
+
+// commentAt is where a // comment starts on a line of code, outside string and char literals, or -1.
+func commentAt(l string) int {
+	quote := byte(0)
+	for i := 0; i < len(l)-1; i++ {
+		c := l[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '/' && l[i+1] == '/':
+			return i
+		}
+	}
+	return -1
+}
+
+// addImports adds import lines a fix needs that the file does not have yet: after its last import, or after its
+// package line when it has none.
+func addImports(src string, imports []string) string {
+	for _, imp := range imports {
+		if strings.Contains(src, imp) {
+			continue
+		}
+		if all := importAt.FindAllStringIndex(src, -1); len(all) > 0 {
+			end := all[len(all)-1][1]
+			src = src[:end] + "\n" + imp + src[end:]
+		} else if p := packageAt.FindStringIndex(src); p != nil {
+			src = src[:p[1]] + "\n\n" + imp + src[p[1]:]
+		} else {
+			src = imp + "\n" + src
+		}
+	}
+	return src
+}
+
+// offTopicOnce asks whether a suggestion is about the issue only on the first try; a retry has the same suggestion.
+func (f *Fixer) offTopicOnce(ctx context.Context, retry string, finding store.Finding, paths []string, guidance string) string {
+	if retry != "" {
+		return ""
+	}
+	return f.offTopic(ctx, finding, paths, guidance)
+}
+
+// compilerErrors keeps the lines of a Maven build that say what is wrong, so the model gets the errors, not the log.
+func compilerErrors(out string) string {
+	var keep []string
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[ERROR]") && (strings.Contains(t, ".java") || strings.Contains(t, "symbol") || strings.Contains(t, "required") || strings.Contains(t, "found")) ||
+			strings.HasPrefix(t, "symbol:") || strings.HasPrefix(t, "location:") || strings.HasPrefix(t, "required:") || strings.HasPrefix(t, "found:") || strings.HasPrefix(t, "reason:") {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) == 0 {
+		return tail(out, 25)
+	}
+	if len(keep) > 25 {
+		keep = keep[:25]
+	}
+	return strings.Join(keep, "\n")
+}
+
+// clip shortens s to n bytes for a prompt.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

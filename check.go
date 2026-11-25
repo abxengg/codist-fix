@@ -25,7 +25,22 @@ type Check struct {
 const checkTimeout = 6 * time.Minute
 
 // Check builds the fixed code of the module the fix touches, then runs its tests.
-func (f *Fixer) Check(ctx context.Context, id string) Check {
+func (f *Fixer) Check(ctx context.Context, id string) Check { return f.build(ctx, id, true) }
+
+// compiles builds a fix without running the tests: whether it compiles, the build output, and whether it could be
+// built at all (no Maven project or no Maven means it could not, and the fix is shown unchecked).
+func (f *Fixer) compiles(ctx context.Context, p *Proposal) (string, bool, bool) {
+	f.mu.Lock()
+	if f.proposals == nil {
+		f.proposals = map[string]*Proposal{}
+	}
+	f.proposals[p.ID] = p
+	f.mu.Unlock()
+	c := f.build(ctx, p.ID, false)
+	return c.Output, c.Status == "passed", c.Status != "unavailable"
+}
+
+func (f *Fixer) build(ctx context.Context, id string, tests bool) Check {
 	start := time.Now()
 	done := func(status, step, out string) Check {
 		return Check{Status: status, Step: step, Output: tail(out, 40), TookMs: time.Since(start).Milliseconds()}
@@ -84,6 +99,9 @@ func (f *Fixer) Check(ctx context.Context, id string) Check {
 	if out, err := run("compile"); err != nil {
 		slog.Debug("fix does not compile", "lib", "fix", "id", id, "err", err, "output", tail(out, 20))
 		return done("failed", "compile", out)
+	}
+	if !tests {
+		return done("passed", "compile", "")
 	}
 	if out, err := run("test"); err != nil {
 		slog.Debug("fix fails tests", "lib", "fix", "id", id, "err", err, "output", tail(out, 20))

@@ -317,3 +317,58 @@ func TestMavenIn(t *testing.T) {
 		t.Errorf("wrapper not found for the root module: %q", got)
 	}
 }
+
+func TestTidyDropsReasoningAndMovesImports(t *testing.T) {
+	find := "        return orders.findById(orderId).get().customerId();"
+	replace := `        return orders.findById(orderId).orElseThrow(() -> new NotFoundException("No order " + orderId)).customerId();
+        import com.shoplab.order.exception.NotFoundException; // Assuming the exception class exists in the project
+        // Note: The problem description suggests using NotFoundException. I will assume it is importable.
+        // Since I cannot add imports outside the snippet, I will assume the class exists.`
+	got, imports := tidy(find, replace)
+	if strings.Contains(got, "import") || strings.Contains(got, "//") || strings.Contains(got, "assume") {
+		t.Errorf("reasoning or import left in the code:\n%s", got)
+	}
+	if !strings.Contains(got, "orElseThrow") {
+		t.Errorf("the fix itself was lost:\n%s", got)
+	}
+	if len(imports) != 1 || imports[0] != "import com.shoplab.order.exception.NotFoundException;" {
+		t.Errorf("imports: %v", imports)
+	}
+	// Comments that were already in the code, and // inside strings, are kept.
+	got, _ = tidy("    // keep me\n    x = 1;", "    // keep me\n    x = 2;\n    url = \"http://a\";")
+	if !strings.Contains(got, "// keep me") || !strings.Contains(got, "http://a") {
+		t.Errorf("kept comments or strings were changed:\n%s", got)
+	}
+}
+
+func TestAddImportsAfterTheLastImport(t *testing.T) {
+	src := "package a;\n\nimport java.util.List;\nimport java.util.Map;\n\nclass A {}\n"
+	got := addImports(src, []string{"import a.b.C;", "import java.util.List;"})
+	want := "package a;\n\nimport java.util.List;\nimport java.util.Map;\nimport a.b.C;\n\nclass A {}\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if got := addImports("package a;\n\nclass A {}\n", []string{"import a.b.C;"}); !strings.Contains(got, "package a;\n\nimport a.b.C;\n") {
+		t.Errorf("no imports yet:\n%s", got)
+	}
+}
+
+func TestCompilerErrorsKeepsWhatIsWrong(t *testing.T) {
+	out := `[INFO] Scanning for projects...
+[ERROR] COMPILATION ERROR :
+[ERROR] /tmp/x/order-service/src/main/java/com/shoplab/order/CustomerOrderController.java:[25,22] method findById in class com.shoplab.order.OrderRepository cannot be applied to given types;
+  required: long
+  found:    long,long
+  reason: actual and formal argument lists differ in length
+[INFO] BUILD FAILURE
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.11.0:compile`
+	got := compilerErrors(out)
+	for _, want := range []string{"CustomerOrderController.java:[25,22]", "required: long", "found:    long,long"} {
+		if !strings.Contains(got, strings.TrimSpace(want)) && !strings.Contains(got, "found: long,long") {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "[INFO]") || strings.Contains(got, "Failed to execute goal") {
+		t.Errorf("log noise kept:\n%s", got)
+	}
+}
