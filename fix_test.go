@@ -372,3 +372,84 @@ func TestCompilerErrorsKeepsWhatIsWrong(t *testing.T) {
 		t.Errorf("log noise kept:\n%s", got)
 	}
 }
+
+// A fix applied for an issue the model found closes it, even when the flagged line stays (shop-lab's settlement lock:
+// the fix added an owner check above the delete it flagged).
+func TestApplyClosesTheModelIssue(t *testing.T) {
+	tr, f, _ := setup(t)
+	sha := tr.Head()
+	if err := f.Store.ReplaceFindings(sha, []store.Finding{{SHA: sha, Path: testrepo.ServicePath, Line: testrepo.BugLine, EndLine: testrepo.BugLine,
+		Severity: "medium", Source: "llm", Title: title, Detail: "The error is lost.", Snippet: "} catch (Exception e) {", Key: "m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.Propose(context.Background(), sha, testrepo.ServicePath, testrepo.BugLine, title, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := f.Apply(p.ID, "Rethrow discount errors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, is := range f.Store.AllIssues() {
+		if is.Key == "m1" && (is.State != "resolved" || is.FixedSHA != commit) {
+			t.Fatalf("issue %s, fixed by %q; want resolved by %s", is.State, is.FixedSHA, commit)
+		}
+	}
+}
+
+// An exact check's issue is left to the check, which runs again on the new commit: closing it on apply would hide it
+// for good if the fix did not remove it.
+func TestApplyLeavesACheckIssueToTheCheck(t *testing.T) {
+	tr, f, _ := setup(t)
+	p, err := f.Propose(context.Background(), tr.Head(), testrepo.ServicePath, testrepo.BugLine, title, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Apply(p.ID, "Rethrow discount errors"); err != nil {
+		t.Fatal(err)
+	}
+	for _, is := range f.Store.AllIssues() {
+		if is.Key == "k1" && is.State != "open" {
+			t.Fatalf("check issue %s on apply; the check decides", is.State)
+		}
+	}
+}
+
+// A fix that brings a problem Codist's checks find goes back to the model with that problem, like one that does not
+// compile; after the last try the problem is shown with the fix (shop-lab: an UPDATE changed to run as a query).
+func TestFixThatBringsAProblemIsAskedAgain(t *testing.T) {
+	tr, f, fm := setup(t)
+	fm.reply = `{"onTopic":true,"edits":[{"find":"} catch (Exception e) {\n        }","replace":"} catch (Exception e) {\n            e.printStackTrace();\n        }"}],"why":"Show the error.","message":"Print discount errors"}`
+	sha := tr.Head()
+	tr.Git("rm", "-q", "order-service/pom.xml") // no build, so only the checks judge the fix
+	tr.Git("commit", "-q", "-m", "Drop the build")
+	p, err := f.Propose(context.Background(), sha, testrepo.ServicePath, testrepo.BugLine, title, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.prompts) != MaxTries || !strings.Contains(fm.prompts[1], "Your last change brought a new problem") ||
+		!strings.Contains(fm.prompts[1], "printStackTrace() instead of the logger") {
+		t.Fatalf("%d prompts; the second should name the new problem:\n%q", len(fm.prompts), fm.prompts)
+	}
+	if p.Tries != MaxTries || len(p.NewProblems) != 1 || !strings.Contains(p.NewProblems[0], "printStackTrace") {
+		t.Fatalf("tries %d, new problems %q", p.Tries, p.NewProblems)
+	}
+}
+
+func TestTestsRun(t *testing.T) {
+	dir := t.TempDir()
+	if testsRun(dir) != 0 {
+		t.Fatal("no reports, no tests")
+	}
+	for i, n := range []string{"3", "4"} {
+		rep := filepath.Join(dir, "m"+n, "target", "surefire-reports")
+		_ = os.MkdirAll(rep, 0o755)
+		body := `<?xml version="1.0"?><testsuite xmlns:xsi="x" name="T` + n + `" time="0.1" tests="` + n + `" errors="0" failures="0">`
+		if err := os.WriteFile(filepath.Join(rep, "TEST-T"+string(rune('A'+i))+".xml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := testsRun(dir); got != 7 {
+		t.Fatalf("tests %d, want 7", got)
+	}
+}

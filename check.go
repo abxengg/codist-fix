@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,7 +20,8 @@ import (
 // working tree is never touched. Status is passed, failed or unavailable (no Maven project, or no Maven).
 type Check struct {
 	Status string `json:"status"`
-	Step   string `json:"step"` // compile or tests
+	Step   string `json:"step"`  // compile or tests
+	Tests  int    `json:"tests"` // how many tests ran: 0 after the tests step means there were none, so only the build was checked
 	Output string `json:"output,omitempty"`
 	TookMs int64  `json:"tookMs"`
 }
@@ -107,8 +111,33 @@ func (f *Fixer) build(ctx context.Context, id string, tests bool) Check {
 		slog.Debug("fix fails tests", "lib", "fix", "id", id, "err", err, "output", tail(out, 20))
 		return done("failed", "tests", out)
 	}
-	return done("passed", "tests", "")
+	c := done("passed", "tests", "")
+	if c.Tests = testsRun(dir); c.Tests == 0 {
+		c.Output = "No tests ran, so only the build was checked."
+	}
+	return c
 }
+
+// testsRun adds up the tests Maven's test runner reported in the copy at dir.
+func testsRun(dir string) int {
+	n := 0
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(filepath.Dir(p)) != "surefire-reports" ||
+			!strings.HasPrefix(d.Name(), "TEST-") || !strings.HasSuffix(d.Name(), ".xml") {
+			return nil
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			if m := testCount.FindSubmatch(b); m != nil {
+				k, _ := strconv.Atoi(string(m[1]))
+				n += k
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+var testCount = regexp.MustCompile(`<testsuite\b[^>]*\btests="(\d+)"`)
 
 // mavenIn finds the project's Maven wrapper, in the module's folder or one above it up to dir, or mvn on the path;
 // "" when there is neither.

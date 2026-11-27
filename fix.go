@@ -22,6 +22,7 @@ import (
 
 	git "github.com/abxengg/codist-git"
 	model "github.com/abxengg/codist-model"
+	review "github.com/abxengg/codist-review"
 	"github.com/abxengg/codist-review/store"
 )
 
@@ -61,8 +62,12 @@ type Proposal struct {
 	// compiler's errors. BuildFailed says the last try still did not compile.
 	Tries       int  `json:"tries,omitempty"`
 	BuildFailed bool `json:"buildFailed,omitempty"`
+	// NewProblems are what Codist's exact checks find in the fixed code that they did not find before it: a fix
+	// that brings one goes back to the model like one that does not compile, and these are left after the last try.
+	NewProblems []string `json:"newProblems,omitempty"`
 
-	base    string            // the commit the fix was written against
+	base    string // the commit the fix was written against
+	repo    *git.Repo
 	changed map[string][]byte // new contents by path
 	made    time.Time
 }
@@ -151,16 +156,47 @@ func (f *Fixer) Propose(ctx context.Context, sha, path string, line int, title, 
 		}
 		last = p
 		out, ok, checked := f.compiles(ctx, p)
-		if !checked || ok {
+		if checked && !ok {
+			p.BuildFailed = true
+			slog.Info("fix does not compile, asking again", "lib", "fix", "id", p.ID, "try", try)
+			retry = fmt.Sprintf("\n## Your last change did not compile\n```diff\n%s```\nThe compiler said:\n```\n%s\n```\n"+
+				"Write the change again so it compiles: call only methods, fields and classes that exist in the code shown, keep to the "+
+				"recommended approach, and change nothing else.\n", p.Patch, compilerErrors(out))
+			continue
+		}
+		p.NewProblems = p.problems()
+		if len(p.NewProblems) == 0 {
 			return p, nil
 		}
-		p.BuildFailed = true
-		slog.Info("fix does not compile, asking again", "lib", "fix", "id", p.ID, "try", try)
-		retry = fmt.Sprintf("\n## Your last change did not compile\n```diff\n%s```\nThe compiler said:\n```\n%s\n```\n"+
-			"Write the change again so it compiles: call only methods, fields and classes that exist in the code shown, keep to the "+
-			"recommended approach, and change nothing else.\n", p.Patch, compilerErrors(out))
+		slog.Info("fix brings a new problem", "lib", "fix", "id", p.ID, "try", try, "problems", p.NewProblems)
+		retry = fmt.Sprintf("\n## Your last change brought a new problem\n```diff\n%s```\nCodist's checks found in the changed code:\n- %s\n"+
+			"Write the change again without it, keep to the recommended approach, and change nothing else.\n", p.Patch, strings.Join(p.NewProblems, "\n- "))
 	}
 	return last, nil
+}
+
+// problems lists what Codist's exact checks find in the fixed files and not in the same files before the fix, each
+// with its line and what to do instead. A problem the fix leaves in place is not new.
+func (p *Proposal) problems() []string {
+	var out []string
+	for _, pth := range p.Paths {
+		if !review.Java.Owns(pth) {
+			continue
+		}
+		old, _ := p.repo.FileAt(p.base, pth)
+		before := map[string]int{}
+		for _, is := range review.Java.Check(review.Java.Parse(pth, old), nil, nil) {
+			before[is.Rule]++
+		}
+		for _, is := range review.Java.Check(review.Java.Parse(pth, p.changed[pth]), nil, nil) {
+			if before[is.Rule] > 0 {
+				before[is.Rule]--
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s (%s line %d). %s", is.Title, pth, is.Line, is.Suggestion))
+		}
+	}
+	return out
 }
 
 func (f *Fixer) attempt(ctx context.Context, sha, path string, line int, title, guidance, retry string, also ...Ref) (*Proposal, error) {
@@ -274,7 +310,7 @@ func (f *Fixer) attempt(ctx context.Context, sha, path string, line int, title, 
 	if len(changed) == 0 {
 		return nil, errors.New("The model did not propose a change. Try again, or suggest how to fix it.")
 	}
-	p := &Proposal{ID: newID(), SHA: sha, Path: path, Finding: finding, Branch: f.Repo.Branch(), base: head, changed: changed, made: time.Now()}
+	p := &Proposal{ID: newID(), SHA: sha, Path: path, Finding: finding, Branch: f.Repo.Branch(), base: head, repo: f.Repo, changed: changed, made: time.Now()}
 	for pth := range changed {
 		p.Paths = append(p.Paths, pth)
 	}
@@ -363,7 +399,16 @@ func (f *Fixer) Apply(id, message string) (string, error) {
 		return "", fmt.Errorf("git commit: %s", strings.TrimSpace(string(out)))
 	}
 	f.Discard(id)
-	return f.Repo.Head(), nil
+	sha := f.Repo.Head()
+	// A person applied this fix for this issue, so it is fixed by that commit. Codist cannot tell that from the code
+	// alone for an issue the model found: it closes one only when the flagged line is gone, and a fix may keep the
+	// line and add a guard around it. An exact check's issue is left to the check, which runs again on the commit.
+	if p.Finding.Rule == "" && p.Finding.Key != "" && f.Store != nil {
+		if err := f.Store.Resolve([]string{p.Finding.Key}, sha); err != nil {
+			slog.Warn("fixed issue not closed", "lib", "fix", "id", id, "err", err)
+		}
+	}
+	return sha, nil
 }
 
 // Discard forgets a prepared fix.

@@ -4,15 +4,17 @@ go 1.26.0
 
 require (
 	github.com/abxengg/codist-git v0.7.0
-	github.com/abxengg/codist-model v0.6.0
-	github.com/abxengg/codist-review v0.11.0
+	github.com/abxengg/codist-model v0.8.0
+	github.com/abxengg/codist-review v0.14.0
 )
 
 require (
+	github.com/abxengg/codist-java v0.6.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
+	github.com/odvcencio/gotreesitter v0.56.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	modernc.org/libc v1.79.0 // indirect
