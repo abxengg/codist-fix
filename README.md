@@ -5,12 +5,15 @@ Prepares fixes for the issues [Codist](https://github.com/abxengg/codist) found,
 - **Propose:** the local model writes small edits to the current code for one issue, with why. A developer can say
   how they want it fixed; a suggestion about anything else (another class, a new feature) is refused. Each fix is
   compiled before it is shown; one that does not compile goes back to the model with the compiler's errors, up to
-  three tries. On 10 open issues of shop-lab, 5 fixes compiled on the first try and 9 after the retries
+  three tries. A fix that brings a problem Codist's exact checks find goes back the same way, and what is left after
+  the last try is shown with the fix. On 10 open issues of shop-lab, 5 fixes compiled on the first try and 9 after the
+  retries; applied and read against the answer key, 7 of 10 were right and 1 was wrong but compiled
   ([#4](https://github.com/abxengg/codist-fix/issues/4)).
 - **Check:** the fixed code is built and its tests run with Maven in a separate copy, so the working tree is never
-  touched.
+  touched. It says how many tests ran: with none, only the build was checked.
 - **Apply:** only after a person approves, and only the fix's own files are committed. It refuses if the branch moved
-  or the files changed since the fix was prepared.
+  or the files changed since the fix was prepared. Applying closes the issue the model found; an exact check's issue
+  closes when the check no longer finds it.
 - **Remember:** why a fix was rejected is kept and shown to the model next time.
 
 `Routes` registers the requests the interface's fix dialog sends: `POST /api/fix`, `POST /api/fix/{id}/check`,
